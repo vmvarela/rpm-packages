@@ -87,7 +87,8 @@ jobs:
           [vmvarela]
           name=vmvarela tools
           baseurl=https://vmvarela.github.io/rpm-packages/packages/$basearch
-          gpgcheck=1
+          gpgcheck=0
+          repo_gpgcheck=1
           gpgkey=https://vmvarela.github.io/rpm-packages/RPM-GPG-KEY-vmvarela
           enabled=1
           REPO
@@ -102,7 +103,8 @@ jobs:
           <h1>vmvarela RPM repository</h1>
           <h2>Installation</h2>
           <pre>
-          sudo dnf config-manager --add-repo https://vmvarela.github.io/rpm-packages/vmvarela.repo
+          sudo curl -fsSL https://vmvarela.github.io/rpm-packages/vmvarela.repo \
+            -o /etc/yum.repos.d/vmvarela.repo
           sudo dnf install sql-pipe
           </pre>
           </body>

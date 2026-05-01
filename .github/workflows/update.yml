@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version (without v, e.g. 0.3.0)"
+        description: "Release version (without v, e.g. 0.7.0)"
         required: true
 
 concurrency:
@@ -28,7 +28,7 @@ jobs:
       - name: Install tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y createrepo-c gnupg rpm
+          sudo apt-get install -y createrepo-c gnupg
 
       - name: Resolve version
         id: vars
@@ -40,22 +40,25 @@ jobs:
         run: |
           VERSION="${{ steps.vars.outputs.version }}"
           mkdir -p site/packages/x86_64 site/packages/aarch64
-          for GOARCH_RPM in "amd64:x86_64" "arm64:aarch64"; do
-            GOARCH="${GOARCH_RPM%%:*}"
-            RPM_ARCH="${GOARCH_RPM##*:}"
-            FILE="sql-pipe_${VERSION}_linux_${GOARCH}.rpm"
+          # nfpm RPM filename: sql-pipe-VERSION-1.ARCH.rpm
+          for RPM_ARCH in x86_64 aarch64; do
+            FILE="sql-pipe-${VERSION}-1.${RPM_ARCH}.rpm"
             URL="https://github.com/vmvarela/sql-pipe/releases/download/v${VERSION}/${FILE}"
             if curl -fsSL "${URL}" -o "site/packages/${RPM_ARCH}/${FILE}" 2>/dev/null; then
-              echo "Downloaded ${FILE} -> ${RPM_ARCH}"
+              echo "Downloaded ${FILE}"
             else
               echo "Skipped ${FILE} (not available)"
             fi
           done
+          ls -laR site/packages/
 
       - name: Generate RPM repository metadata
         run: |
-          createrepo_c site/packages/x86_64/ || true
-          createrepo_c site/packages/aarch64/ || true
+          for ARCH in x86_64 aarch64; do
+            if ls site/packages/${ARCH}/*.rpm 2>/dev/null; then
+              createrepo_c site/packages/${ARCH}/
+            fi
+          done
 
       - name: Sign repomd.xml
         env:
@@ -66,13 +69,8 @@ jobs:
             echo "::warning::GPG_SIGNING_KEY not set — repository will be unsigned"
             exit 0
           fi
-
           echo "${GPG_SIGNING_KEY}" | gpg --batch --import
-
-          # Export public key
           gpg --armor --export "${GPG_KEY_ID}" > site/RPM-GPG-KEY-vmvarela
-
-          # Sign both arch repomd.xml files
           for ARCH in x86_64 aarch64; do
             REPOMD="site/packages/${ARCH}/repodata/repomd.xml"
             if [ -f "${REPOMD}" ]; then
@@ -85,7 +83,6 @@ jobs:
 
       - name: Generate .repo config file
         run: |
-          VERSION="${{ steps.vars.outputs.version }}"
           cat > site/vmvarela.repo << 'REPO'
           [vmvarela]
           name=vmvarela tools
@@ -100,21 +97,14 @@ jobs:
           cat > site/index.html << 'HTML'
           <!DOCTYPE html>
           <html lang="en">
-          <head>
-            <meta charset="utf-8">
-            <title>vmvarela RPM repository</title>
-          </head>
+          <head><meta charset="utf-8"><title>vmvarela RPM repository</title></head>
           <body>
           <h1>vmvarela RPM repository</h1>
-          <h2>Installation (Fedora / RHEL / openSUSE)</h2>
+          <h2>Installation</h2>
           <pre>
           sudo dnf config-manager --add-repo https://vmvarela.github.io/rpm-packages/vmvarela.repo
           sudo dnf install sql-pipe
           </pre>
-          <h2>Packages</h2>
-          <ul>
-            <li><a href="https://github.com/vmvarela/sql-pipe">sql-pipe</a> — Read CSV from stdin, query with SQL, write CSV to stdout</li>
-          </ul>
           </body>
           </html>
           HTML

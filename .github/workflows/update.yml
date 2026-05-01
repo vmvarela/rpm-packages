@@ -1,0 +1,129 @@
+name: Update RPM Repository
+
+on:
+  repository_dispatch:
+    types: [update-sql-pipe]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (without v, e.g. 0.3.0)"
+        required: true
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    name: Build and deploy RPM repository
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      pages: write
+      id-token: write
+
+    steps:
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y createrepo-c gnupg rpm
+
+      - name: Resolve version
+        id: vars
+        run: |
+          VERSION="${{ github.event.client_payload.version || github.event.inputs.version }}"
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Download .rpm packages
+        run: |
+          VERSION="${{ steps.vars.outputs.version }}"
+          mkdir -p site/packages/x86_64 site/packages/aarch64
+          for GOARCH_RPM in "amd64:x86_64" "arm64:aarch64"; do
+            GOARCH="${GOARCH_RPM%%:*}"
+            RPM_ARCH="${GOARCH_RPM##*:}"
+            FILE="sql-pipe_${VERSION}_linux_${GOARCH}.rpm"
+            URL="https://github.com/vmvarela/sql-pipe/releases/download/v${VERSION}/${FILE}"
+            if curl -fsSL "${URL}" -o "site/packages/${RPM_ARCH}/${FILE}" 2>/dev/null; then
+              echo "Downloaded ${FILE} -> ${RPM_ARCH}"
+            else
+              echo "Skipped ${FILE} (not available)"
+            fi
+          done
+
+      - name: Generate RPM repository metadata
+        run: |
+          createrepo_c site/packages/x86_64/ || true
+          createrepo_c site/packages/aarch64/ || true
+
+      - name: Sign repomd.xml
+        env:
+          GPG_SIGNING_KEY: ${{ secrets.GPG_SIGNING_KEY }}
+          GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
+        run: |
+          if [ -z "${GPG_SIGNING_KEY}" ]; then
+            echo "::warning::GPG_SIGNING_KEY not set — repository will be unsigned"
+            exit 0
+          fi
+
+          echo "${GPG_SIGNING_KEY}" | gpg --batch --import
+
+          # Export public key
+          gpg --armor --export "${GPG_KEY_ID}" > site/RPM-GPG-KEY-vmvarela
+
+          # Sign both arch repomd.xml files
+          for ARCH in x86_64 aarch64; do
+            REPOMD="site/packages/${ARCH}/repodata/repomd.xml"
+            if [ -f "${REPOMD}" ]; then
+              gpg --batch --yes --pinentry-mode loopback \
+                --default-key "${GPG_KEY_ID}" \
+                --detach-sign --armor \
+                -o "${REPOMD}.asc" "${REPOMD}"
+            fi
+          done
+
+      - name: Generate .repo config file
+        run: |
+          VERSION="${{ steps.vars.outputs.version }}"
+          cat > site/vmvarela.repo << 'REPO'
+          [vmvarela]
+          name=vmvarela tools
+          baseurl=https://vmvarela.github.io/rpm-packages/packages/$basearch
+          gpgcheck=1
+          gpgkey=https://vmvarela.github.io/rpm-packages/RPM-GPG-KEY-vmvarela
+          enabled=1
+          REPO
+
+      - name: Create index page
+        run: |
+          cat > site/index.html << 'HTML'
+          <!DOCTYPE html>
+          <html lang="en">
+          <head>
+            <meta charset="utf-8">
+            <title>vmvarela RPM repository</title>
+          </head>
+          <body>
+          <h1>vmvarela RPM repository</h1>
+          <h2>Installation (Fedora / RHEL / openSUSE)</h2>
+          <pre>
+          sudo dnf config-manager --add-repo https://vmvarela.github.io/rpm-packages/vmvarela.repo
+          sudo dnf install sql-pipe
+          </pre>
+          <h2>Packages</h2>
+          <ul>
+            <li><a href="https://github.com/vmvarela/sql-pipe">sql-pipe</a> — Read CSV from stdin, query with SQL, write CSV to stdout</li>
+          </ul>
+          </body>
+          </html>
+          HTML
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

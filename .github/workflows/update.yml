@@ -2,12 +2,20 @@ name: Update RPM Repository
 
 on:
   repository_dispatch:
-    types: [update-sql-pipe]
+    types: [update-sql-pipe, update-ghoten]
   workflow_dispatch:
     inputs:
-      version:
-        description: "Release version (without v, e.g. 0.7.0)"
+      package:
+        description: "Package whose release triggered the rebuild"
         required: true
+        default: sql-pipe
+        type: choice
+        options:
+          - sql-pipe
+          - ghoten
+      version:
+        description: "Release version without v; leave empty to use latest stable"
+        required: false
 
 concurrency:
   group: pages
@@ -30,27 +38,72 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y createrepo-c gnupg
 
-      - name: Resolve version
+      - name: Resolve package versions
         id: vars
+        shell: bash
+        env:
+          EVENT_ACTION: ${{ github.event.action }}
+          INPUT_PACKAGE: ${{ github.event.inputs.package }}
+          REQUESTED_VERSION: ${{ github.event.client_payload.version || github.event.inputs.version }}
         run: |
-          VERSION="${{ github.event.client_payload.version || github.event.inputs.version }}"
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          set -euo pipefail
+          latest_version() {
+            curl --fail --silent --show-error \
+              "https://api.github.com/repos/vmvarela/$1/releases/latest" |
+              jq -r '.tag_name' |
+              sed 's/^v//'
+          }
+          case "${EVENT_ACTION:-${INPUT_PACKAGE:-}}" in
+            update-sql-pipe|sql-pipe) target="sql-pipe" ;;
+            update-ghoten|ghoten) target="ghoten" ;;
+            *) echo "::error::Unknown package update event."; exit 1 ;;
+          esac
+          sql_pipe_version="$(latest_version sql-pipe)"
+          ghoten_version="$(latest_version ghoten)"
+          if [[ -n "${REQUESTED_VERSION:-}" ]]; then
+            requested="${REQUESTED_VERSION#v}"
+            if [[ "$target" == "sql-pipe" ]]; then sql_pipe_version="$requested"; else ghoten_version="$requested"; fi
+          fi
+          echo "target=$target" >> "$GITHUB_OUTPUT"
+          echo "sql_pipe_version=$sql_pipe_version" >> "$GITHUB_OUTPUT"
+          echo "ghoten_version=$ghoten_version" >> "$GITHUB_OUTPUT"
+          echo "Rebuilding RPM repository: sql-pipe=$sql_pipe_version, ghoten=$ghoten_version"
 
       - name: Download .rpm packages
+        shell: bash
+        env:
+          TARGET: ${{ steps.vars.outputs.target }}
+          SQL_PIPE_VERSION: ${{ steps.vars.outputs.sql_pipe_version }}
+          GHOTEN_VERSION: ${{ steps.vars.outputs.ghoten_version }}
         run: |
-          VERSION="${{ steps.vars.outputs.version }}"
+          set -euo pipefail
           mkdir -p site/packages/x86_64 site/packages/aarch64
-          # nfpm RPM filename: sql-pipe-VERSION-1.ARCH.rpm
-          for RPM_ARCH in x86_64 aarch64; do
-            FILE="sql-pipe-${VERSION}-1.${RPM_ARCH}.rpm"
-            URL="https://github.com/vmvarela/sql-pipe/releases/download/v${VERSION}/${FILE}"
-            if curl -fsSL "${URL}" -o "site/packages/${RPM_ARCH}/${FILE}" 2>/dev/null; then
-              echo "Downloaded ${FILE}"
+
+          for arch in x86_64 aarch64; do
+            file="sql-pipe-${SQL_PIPE_VERSION}-1.${arch}.rpm"
+            curl --fail --silent --show-error --location \
+              "https://github.com/vmvarela/sql-pipe/releases/download/v${SQL_PIPE_VERSION}/${file}" \
+              -o "site/packages/${arch}/${file}"
+          done
+
+          ghoten_count=0
+          for arch in x86_64 aarch64; do
+            file="ghoten-${GHOTEN_VERSION}-1.${arch}.rpm"
+            if curl --fail --silent --show-error --location \
+              "https://github.com/vmvarela/ghoten/releases/download/v${GHOTEN_VERSION}/${file}" \
+              -o "site/packages/${arch}/${file}"; then
+              ghoten_count=$((ghoten_count + 1))
             else
-              echo "Skipped ${FILE} (not available)"
+              rm -f "site/packages/${arch}/${file}"
+              echo "Ghoten native package not available yet: ${file}"
             fi
           done
-          ls -laR site/packages/
+
+          if [[ "$TARGET" == "ghoten" && "$ghoten_count" -ne 2 ]]; then
+            echo "::error::A Ghoten-triggered rebuild requires both Ghoten RPM packages."
+            exit 1
+          fi
+          find site/packages -type f -print | sort
 
       - name: Generate RPM repository metadata
         run: |
@@ -106,6 +159,7 @@ jobs:
           sudo curl -fsSL https://vmvarela.github.io/rpm-packages/vmvarela.repo \
             -o /etc/yum.repos.d/vmvarela.repo
           sudo dnf install sql-pipe
+          sudo dnf install ghoten
           </pre>
           </body>
           </html>

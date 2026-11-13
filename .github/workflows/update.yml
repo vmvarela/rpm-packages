@@ -2,12 +2,29 @@ name: Update RPM Repository
 
 on:
   repository_dispatch:
-    types: [update-sql-pipe]
+    types: [update-sql-pipe, update-damas]
   workflow_dispatch:
     inputs:
-      version:
-        description: "Release version (without v, e.g. 0.7.0)"
+      package:
+        description: "Package whose release triggered the rebuild"
         required: true
+        default: sql-pipe
+        type: choice
+        options:
+          - sql-pipe
+          - damas
+      version:
+        description: "Release version without v; leave empty to use latest stable"
+        required: false
+      force:
+        description: "Rebuild and deploy even when the state already matches the release"
+        required: false
+        default: false
+        type: boolean
+
+# Publisher contract (docs/receivers.md in vmvarela/package-distribution).
+env:
+  PACKAGE_DISTRIBUTION_SHA: 3154af7ef78aa60368d8f7e45241914cb3a6642a
 
 concurrency:
   group: pages
@@ -21,79 +38,104 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     permissions:
+      contents: write
       pages: write
       id-token: write
 
     steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Check out package-distribution
+        uses: actions/checkout@v7
+        with:
+          repository: vmvarela/package-distribution
+          ref: ${{ env.PACKAGE_DISTRIBUTION_SHA }}
+          path: package-distribution
+          persist-credentials: false
+
       - name: Install tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y createrepo-c gnupg
+          sudo apt-get install -y createrepo-c gnupg rpm
+          # Debian ships rpmsign inside the rpm package; only Fedora splits it into rpm-sign.
+          # Debian's rpm execs gpg2, which the gnupg package does not ship.
+          sudo ln -sf /usr/bin/gpg /usr/bin/gpg2
 
-      - name: Resolve version
+      - name: Resolve target and version
         id: vars
+        shell: bash
+        env:
+          EVENT_ACTION: ${{ github.event.action }}
+          INPUT_PACKAGE: ${{ github.event.inputs.package }}
+          REQUESTED_VERSION: ${{ github.event.client_payload.version || github.event.inputs.version }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          VERSION="${{ github.event.client_payload.version || github.event.inputs.version }}"
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          set -euo pipefail
 
-      - name: Download .rpm packages
-        run: |
-          VERSION="${{ steps.vars.outputs.version }}"
-          mkdir -p site/packages/x86_64 site/packages/aarch64
-          # nfpm RPM filename: sql-pipe-VERSION-1.ARCH.rpm
-          for RPM_ARCH in x86_64 aarch64; do
-            FILE="sql-pipe-${VERSION}-1.${RPM_ARCH}.rpm"
-            URL="https://github.com/vmvarela/sql-pipe/releases/download/v${VERSION}/${FILE}"
-            if curl -fsSL "${URL}" -o "site/packages/${RPM_ARCH}/${FILE}" 2>/dev/null; then
-              echo "Downloaded ${FILE}"
-            else
-              echo "Skipped ${FILE} (not available)"
-            fi
-          done
-          ls -laR site/packages/
+          case "${EVENT_ACTION:-${INPUT_PACKAGE:-}}" in
+            update-sql-pipe|sql-pipe) target="sql-pipe" ;;
+            update-damas|damas) target="damas" ;;
+            *) echo "::error::Unknown package update event."; exit 1 ;;
+          esac
 
-      - name: Generate RPM repository metadata
-        run: |
-          for ARCH in x86_64 aarch64; do
-            if ls site/packages/${ARCH}/*.rpm 2>/dev/null; then
-              createrepo_c site/packages/${ARCH}/
-            fi
-          done
+          catalog="package-distribution/catalog/${target}.json"
+          repo="$(jq -r '.repo' "$catalog")"
+          version="${REQUESTED_VERSION:-}"
+          version="${version#v}"
+          if [[ -z "$version" ]]; then
+            version="$(gh api "repos/${repo}/releases/latest" --jq .tag_name)"
+            version="${version#v}"
+          fi
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Not a stable release version for ${target}: ${version}"
+            exit 1
+          fi
 
-      - name: Sign repomd.xml
+          {
+            echo "target=${target}"
+            echo "catalog=${catalog}"
+            echo "version=${version}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Import signing key
         env:
           GPG_SIGNING_KEY: ${{ secrets.GPG_SIGNING_KEY }}
           GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
         run: |
-          if [ -z "${GPG_SIGNING_KEY}" ]; then
-            echo "::warning::GPG_SIGNING_KEY not set — repository will be unsigned"
-            exit 0
+          if [ -z "${GPG_SIGNING_KEY}" ] || [ -z "${GPG_KEY_ID}" ]; then
+            echo "::error::GPG_SIGNING_KEY and GPG_KEY_ID secrets must be configured; refusing to deploy an unsigned repository."
+            exit 1
           fi
           echo "${GPG_SIGNING_KEY}" | gpg --batch --import
-          gpg --armor --export "${GPG_KEY_ID}" > site/RPM-GPG-KEY-vmvarela
-          for ARCH in x86_64 aarch64; do
-            REPOMD="site/packages/${ARCH}/repodata/repomd.xml"
-            if [ -f "${REPOMD}" ]; then
-              gpg --batch --yes --pinentry-mode loopback \
-                --default-key "${GPG_KEY_ID}" \
-                --detach-sign --armor \
-                -o "${REPOMD}.asc" "${REPOMD}"
-            fi
-          done
 
-      - name: Generate .repo config file
+      - name: Publish site
+        id: publish
+        shell: bash
+        env:
+          GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
+          TARGET: ${{ steps.vars.outputs.target }}
+          VERSION: ${{ steps.vars.outputs.version }}
+          FORCE: ${{ github.event.inputs.force }}
         run: |
-          cat > site/vmvarela.repo << 'REPO'
-          [vmvarela]
-          name=vmvarela tools
-          baseurl=https://vmvarela.github.io/rpm-packages/packages/$basearch
-          gpgcheck=0
-          repo_gpgcheck=1
-          gpgkey=https://vmvarela.github.io/rpm-packages/RPM-GPG-KEY-vmvarela
-          enabled=1
-          REPO
+          set -euo pipefail
+          extra=()
+          if [ "${FORCE:-false}" = "true" ]; then extra+=(--force); fi
+          node package-distribution/scripts/rpm-publish.mjs \
+            --catalog "package-distribution/catalog/${TARGET}.json" \
+            --version "${VERSION}" \
+            --source github \
+            --out site \
+            --state state "${extra[@]}"
+          if [ -f site/.complete ]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No change for ${TARGET} ${VERSION}; nothing to deploy."
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Create index page
+        if: steps.publish.outputs.deploy == 'true'
         run: |
           cat > site/index.html << 'HTML'
           <!DOCTYPE html>
@@ -106,16 +148,38 @@ jobs:
           sudo curl -fsSL https://vmvarela.github.io/rpm-packages/vmvarela.repo \
             -o /etc/yum.repos.d/vmvarela.repo
           sudo dnf install sql-pipe
+          sudo dnf install damas
           </pre>
           </body>
           </html>
           HTML
 
       - name: Upload Pages artifact
+        if: steps.publish.outputs.deploy == 'true'
         uses: actions/upload-pages-artifact@v3
         with:
           path: site/
 
       - name: Deploy to GitHub Pages
+        if: steps.publish.outputs.deploy == 'true'
         id: deployment
         uses: actions/deploy-pages@v4
+
+      - name: Record durable state
+        if: steps.publish.outputs.deploy == 'true'
+        shell: bash
+        env:
+          TARGET: ${{ steps.vars.outputs.target }}
+          VERSION: ${{ steps.vars.outputs.version }}
+        run: |
+          set -euo pipefail
+          rsync -a --delete site.state/ state/
+          git add state
+          if git diff --cached --quiet; then
+            echo "State already current."
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -m "chore(state): record ${TARGET} ${VERSION}"
+          git push origin HEAD:main

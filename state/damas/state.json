@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "package": "damas",
+  "architectures": {
+    "x86_64": [
+      {
+        "version": "0.1.10",
+        "sha256": "e795e6d77b08a580b05a8839d76f97732d52757dcda964dafdc1e23404c686fe",
+        "file": "damas-0.1.10-1.x86_64.rpm"
+      }
+    ],
+    "aarch64": [
+      {
+        "version": "0.1.10",
+        "sha256": "6116fb0337772d5414438cd38102d82981248b83536b2d122361d41af5100fd5",
+        "file": "damas-0.1.10-1.aarch64.rpm"
+      }
+    ]
+  }
+}

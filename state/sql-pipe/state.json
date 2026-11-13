@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "package": "sql-pipe",
+  "architectures": {
+    "x86_64": [
+      {
+        "version": "0.27.0",
+        "sha256": "5895f462412d0a53203d90fdc9d6edd20be9d3b67e80d83ec779355f9a2f00e9",
+        "file": "sql-pipe-0.27.0-1.x86_64.rpm"
+      }
+    ],
+    "aarch64": [
+      {
+        "version": "0.27.0",
+        "sha256": "adb25167771453a71ea45c59648a1752f88d86afc24083de16b27d5177c3a9e1",
+        "file": "sql-pipe-0.27.0-1.aarch64.rpm"
+      }
+    ]
+  }
+}

@@ -2,7 +2,7 @@ name: Update RPM Repository
 
 on:
   repository_dispatch:
-    types: [update-sql-pipe, update-damas]
+    types: [update-sql-pipe, update-damas, update-ztd]
   workflow_dispatch:
     inputs:
       package:
@@ -13,6 +13,7 @@ on:
         options:
           - sql-pipe
           - damas
+          - ztd
       version:
         description: "Release version without v; leave empty to use latest stable"
         required: false
@@ -26,7 +27,7 @@ on:
 
 # Publisher contract (docs/receivers.md in vmvarela/package-distribution).
 env:
-  PACKAGE_DISTRIBUTION_SHA: 3154af7ef78aa60368d8f7e45241914cb3a6642a
+  PACKAGE_DISTRIBUTION_SHA: beec0beb2a6d4cfb2252c9a37b1d939a959bae4d
 
 concurrency:
   group: pages
@@ -79,6 +80,7 @@ jobs:
           case "${EVENT_ACTION:-${INPUT_PACKAGE:-}}" in
             update-sql-pipe|sql-pipe) target="sql-pipe" ;;
             update-damas|damas) target="damas" ;;
+            update-ztd|ztd) target="ztd" ;;
             *) echo "::error::Unknown package update event."; exit 1 ;;
           esac
 

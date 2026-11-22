@@ -16,6 +16,7 @@ sudo dnf install sql-pipe
 |---------|-------------|
 | [sql-pipe](https://github.com/vmvarela/sql-pipe) | Read CSV from stdin, query with SQL, write CSV to stdout |
 | [damas](https://github.com/vmvarela/damas) | Terminal board game suite |
+| [zepp-life](https://github.com/vmvarela/zepp-life) | Sync Zepp Life activity and body measurements into a local SQLite database |
 
 ## How it is built
 

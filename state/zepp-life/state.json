@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "package": "zepp-life",
+  "architectures": {
+    "x86_64": [
+      {
+        "version": "0.1.0",
+        "sha256": "af960c71c32e66f98d22533104bbcc31cce593cd4521c0829acff20f67e6626a",
+        "file": "zepp-life-0.1.0-1.x86_64.rpm"
+      }
+    ],
+    "aarch64": [
+      {
+        "version": "0.1.0",
+        "sha256": "0fabbf935766ae74a59993e110568c715a97d6ee130fca90f27ea22675da4fe4",
+        "file": "zepp-life-0.1.0-1.aarch64.rpm"
+      }
+    ]
+  }
+}

@@ -4,12 +4,22 @@
   "architectures": {
     "x86_64": [
       {
+        "version": "0.4.0",
+        "sha256": "ff98201cdcaa25a873b5cd73faea1dab1b94aadbe4817eb8ad904b01376f079a",
+        "file": "ztd-0.4.0-1.x86_64.rpm"
+      },
+      {
         "version": "0.3.0",
         "sha256": "bf8fac3b6000abc97a069f2e37827169cd81b0563bd5e72a3511391fa6a38ecd",
         "file": "ztd-0.3.0-1.x86_64.rpm"
       }
     ],
     "aarch64": [
+      {
+        "version": "0.4.0",
+        "sha256": "45fac064827f270a0131c7afa0cb27b41a69420e0ba7582ae82c5ecaa47ccc3f",
+        "file": "ztd-0.4.0-1.aarch64.rpm"
+      },
       {
         "version": "0.3.0",
         "sha256": "2f6d28ee1cf7d5464e353e33a96001ac465473afc0f6da542b0d3edb1df86488",
